@@ -15,6 +15,7 @@ import 'package:PiliPlus/models_new/video/video_detail/data.dart';
 import 'package:PiliPlus/models_new/video/video_detail/episode.dart' as ugc;
 import 'package:PiliPlus/models_new/video/video_detail/page.dart';
 import 'package:PiliPlus/pages/danmaku/controller.dart';
+import 'package:PiliPlus/services/download/download_foreground_service.dart';
 import 'package:PiliPlus/services/download/download_manager.dart';
 import 'package:PiliPlus/utils/extension/file_ext.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
@@ -52,6 +53,22 @@ class DownloadService extends GetxService {
 
   DownloadManager? _downloadManager;
   DownloadManager? _audioDownloadManager;
+
+  bool _isForegroundServiceRunning = false;
+
+  Future<void> _startForegroundService() async {
+    if (!_isForegroundServiceRunning) {
+      _isForegroundServiceRunning = true;
+      await DownloadForegroundService.start();
+    }
+  }
+
+  void _stopForegroundService() {
+    if (_isForegroundServiceRunning) {
+      _isForegroundServiceRunning = false;
+      DownloadForegroundService.stop();
+    }
+  }
 
   late Future<void> waitForInitialization;
 
@@ -290,6 +307,8 @@ class DownloadService extends GetxService {
         }
       }
 
+      await _startForegroundService();
+
       _curCid = entry.cid;
       curDownload.value = entry;
       waitDownloadQueue.refresh();
@@ -434,6 +453,7 @@ class DownloadService extends GetxService {
       }
     } catch (e) {
       _updateCurStatus(DownloadStatus.failPlayUrl);
+      _stopForegroundService();
       if (kDebugMode) {
         debugPrint('get download url error: $e');
       }
@@ -454,12 +474,18 @@ class DownloadService extends GetxService {
         ..downloadedBytes = progress
         ..status = DownloadStatus.downloading;
       curDownload.refresh();
+      DownloadForegroundService.updateProgress(
+        title: entry.title,
+        progress: progress,
+        total: total,
+      );
     }
   }
 
   void _onDone([Object? error]) {
     if (error != null) {
       _updateCurStatus(_downloadManager?.status ?? DownloadStatus.pause);
+      _stopForegroundService();
       return;
     }
 
@@ -476,6 +502,9 @@ class DownloadService extends GetxService {
         _completeDownload();
       } else {
         _updateBiliDownloadEntryJson(curEntryInfo);
+        if (status == DownloadStatus.failDownloadAudio) {
+          _stopForegroundService();
+        }
       }
     }
   }
@@ -491,6 +520,7 @@ class DownloadService extends GetxService {
               ? DownloadStatus.failDownloadAudio
               : status,
         );
+        _stopForegroundService();
       }
     }
   }
@@ -512,6 +542,9 @@ class DownloadService extends GetxService {
     _downloadManager = null;
     _audioDownloadManager = null;
     nextDownload();
+    if (waitDownloadQueue.isEmpty) {
+      _stopForegroundService();
+    }
   }
 
   void nextDownload() {
@@ -588,6 +621,9 @@ class DownloadService extends GetxService {
     }
     if (downloadNext) {
       nextDownload();
+    }
+    if (waitDownloadQueue.isEmpty || !downloadNext) {
+      _stopForegroundService();
     }
   }
 }
