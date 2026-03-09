@@ -57,7 +57,7 @@ class RenderCustomHeightWidget extends RenderProxyBox {
 
   @override
   void performLayout() {
-    child!.layout(constraints, parentUsesSize: true);
+    child!.layout(constraints);
     size = constraints.constrainDimensions(constraints.maxWidth, height);
   }
 
@@ -65,7 +65,4 @@ class RenderCustomHeightWidget extends RenderProxyBox {
   void paint(PaintingContext context, Offset offset) {
     context.paintChild(child!, offset + _offset);
   }
-
-  @override
-  bool get isRepaintBoundary => true;
 }

@@ -3,7 +3,6 @@ import 'dart:convert';
 
 import 'package:PiliPlus/common/widgets/dialog/report.dart';
 import 'package:PiliPlus/common/widgets/flutter/text_field/controller.dart';
-import 'package:PiliPlus/http/constants.dart';
 import 'package:PiliPlus/http/live.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/video.dart';
@@ -182,12 +181,12 @@ class LiveRoomController extends GetxController {
   void onInit() {
     super.onInit();
     scrollController = ScrollController()..addListener(listener);
-    final account = Accounts.heartbeat;
+    final account = Accounts.main;
     isLogin = account.isLogin;
     mid = account.mid;
-    queryLiveUrl();
+    queryLiveUrl(autoFullScreenFlag: true);
     queryLiveInfoH5();
-    if (isLogin && !Pref.historyPause) {
+    if (Accounts.heartbeat.isLogin && !Pref.historyPause) {
       VideoHttp.roomEntryAction(roomId: roomId);
     }
     if (showSuperChat) {
@@ -195,28 +194,23 @@ class LiveRoomController extends GetxController {
     }
   }
 
-  Future<void>? playerInit({bool autoplay = true}) {
+  Future<void>? playerInit({
+    bool autoplay = true,
+    bool autoFullScreenFlag = false,
+  }) {
     if (videoUrl == null) {
       return null;
     }
     return plPlayerController.setDataSource(
-      DataSource(
-        videoSource: videoUrl,
-        audioSource: null,
-        type: DataSourceType.network,
-        httpHeaders: {
-          'user-agent':
-              'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_3_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Safari/605.1.15',
-          'referer': HttpString.baseUrl,
-        },
-      ),
+      NetworkSource(videoSource: videoUrl!, audioSource: null),
       isLive: true,
       autoplay: autoplay,
       isVertical: isPortrait.value,
+      autoFullScreenFlag: autoFullScreenFlag,
     );
   }
 
-  Future<void> queryLiveUrl() async {
+  Future<void> queryLiveUrl({bool autoFullScreenFlag = false}) async {
     currentQn ??= await Utils.isWiFi
         ? Pref.liveQuality
         : Pref.liveQualityCellular;
@@ -255,7 +249,7 @@ class LiveRoomController extends GetxController {
       currentQnDesc.value =
           LiveQuality.fromCode(currentQn)?.desc ?? currentQn.toString();
       videoUrl = VideoUtils.getLiveCdnUrl(item);
-      await playerInit();
+      await playerInit(autoFullScreenFlag: autoFullScreenFlag);
       isLoaded.value = true;
     } else {
       _showDialog(res.toString());
@@ -428,7 +422,7 @@ class LiveRoomController extends GetxController {
         LiveMessageStream(
             streamToken: info.token!,
             roomId: roomId,
-            uid: mid,
+            uid: Accounts.heartbeat.mid,
             servers: info.hostList!
                 .map((host) => 'wss://${host.host}:${host.wssPort}/sub')
                 .toList(),
@@ -438,16 +432,18 @@ class LiveRoomController extends GetxController {
   }
 
   void addDm(dynamic msg, [DanmakuContentItem<DanmakuExtra>? item]) {
-    messages.add(msg);
-
     if (plPlayerController.showDanmaku) {
       if (item != null) {
         danmakuController?.addDanmaku(item);
       }
       if (autoScroll && !disableAutoScroll.value) {
+        messages.add(msg);
         scrollToBottom();
+        return;
       }
     }
+
+    messages.addOnly(msg);
   }
 
   @pragma('vm:notify-debugger-on-exception')
@@ -488,7 +484,6 @@ class LiveRoomController extends GetxController {
           addDm(
             DanmakuMsg(
               name: name,
-              uid: uid,
               text: msg,
               emots: (extra['emots'] as Map<String, dynamic>?)?.map(
                 (k, v) => MapEntry(k, BaseEmote.fromJson(v)),
@@ -574,7 +569,7 @@ class LiveRoomController extends GetxController {
   }
 
   Future<void> onLike() async {
-    if (!Accounts.main.isLogin) {
+    if (!isLogin) {
       likeClickTime.value = 0;
       return;
     }
@@ -593,7 +588,7 @@ class LiveRoomController extends GetxController {
   }
 
   void onSendDanmaku([bool fromEmote = false]) {
-    if (!Accounts.main.isLogin) {
+    if (!isLogin) {
       SmartDialog.showToast('账号未登录');
       return;
     }
@@ -623,7 +618,7 @@ class LiveRoomController extends GetxController {
   }
 
   void reportSC(SuperChatItem item) {
-    if (!Accounts.main.isLogin) {
+    if (!isLogin) {
       SmartDialog.showToast('账号未登录');
       return;
     }

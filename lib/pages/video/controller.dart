@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' show min;
 import 'dart:ui';
 
@@ -7,11 +8,9 @@ import 'package:PiliPlus/common/widgets/pair.dart';
 import 'package:PiliPlus/common/widgets/progress_bar/segment_progress_bar.dart';
 import 'package:PiliPlus/grpc/bilibili/app/listener/v1.pbenum.dart'
     show PlaylistSource;
-import 'package:PiliPlus/http/constants.dart';
 import 'package:PiliPlus/http/fav.dart';
 import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/http/loading_state.dart';
-import 'package:PiliPlus/http/ua_type.dart';
 import 'package:PiliPlus/http/user.dart';
 import 'package:PiliPlus/http/video.dart';
 import 'package:PiliPlus/main.dart';
@@ -55,10 +54,12 @@ import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
 import 'package:PiliPlus/services/download/download_service.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/extension/context_ext.dart';
+import 'package:PiliPlus/utils/extension/file_ext.dart';
 import 'package:PiliPlus/utils/extension/iterable_ext.dart';
 import 'package:PiliPlus/utils/extension/num_ext.dart';
 import 'package:PiliPlus/utils/extension/size_ext.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
+import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
@@ -71,7 +72,8 @@ import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
-import 'package:media_kit/media_kit.dart';
+import 'package:media_kit/media_kit.dart' hide Subtitle;
+import 'package:path/path.dart' as path;
 
 class VideoDetailController extends GetxController
     with GetTickerProviderStateMixin, BlockMixin {
@@ -633,7 +635,6 @@ class VideoDetailController extends GetxController
     _autoPlay.value = true;
     playedTime = plPlayerController.position;
     plPlayerController
-      ..removeListeners()
       ..isBuffering.value = false
       ..buffered.value = Duration.zero;
 
@@ -656,13 +657,13 @@ class VideoDetailController extends GetxController
     playerInit();
   }
 
-  Future<void>? _initPlayerIfNeeded() {
+  Future<void>? _initPlayerIfNeeded(bool autoFullScreenFlag) {
     if (_autoPlay.value ||
         (plPlayerController.preInitPlayer && !plPlayerController.processing) &&
             (isFileSource
                 ? true
                 : videoPlayerKey.currentState?.mounted == true)) {
-      return playerInit();
+      return playerInit(autoFullScreenFlag: autoFullScreenFlag);
     }
     return null;
   }
@@ -674,28 +675,23 @@ class VideoDetailController extends GetxController
     Duration? duration,
     bool? autoplay,
     Volume? volume,
+    bool autoFullScreenFlag = false,
   }) async {
-    final onlyPlayAudio = plPlayerController.onlyPlayAudio.value;
     Duration? seek = seekToTime ?? defaultST ?? playedTime;
     if (seek == null || seek == Duration.zero) {
       seek = getFirstSegment();
     }
     await plPlayerController.setDataSource(
-      DataSource(
-        videoSource: isFileSource
-            ? null
-            : onlyPlayAudio
-            ? audio ?? audioUrl
-            : video ?? videoUrl,
-        audioSource: isFileSource || onlyPlayAudio ? null : audio ?? audioUrl,
-        type: isFileSource ? DataSourceType.file : DataSourceType.network,
-        httpHeaders: isFileSource
-            ? null
-            : {
-                'user-agent': UaType.pc.ua,
-                'referer': HttpString.baseUrl,
-              },
-      ),
+      isFileSource
+          ? FileSource(
+              dir: args['dirPath'],
+              typeTag: entry.typeTag!,
+              isMp4: entry.mediaType == 1,
+            )
+          : NetworkSource(
+              videoSource: video ?? videoUrl!,
+              audioSource: audio ?? audioUrl,
+            ),
       seekTo: seek,
       duration:
           duration ??
@@ -720,9 +716,7 @@ class VideoDetailController extends GetxController
       width: firstVideo.width,
       height: firstVideo.height,
       volume: volume ?? this.volume,
-      dirPath: isFileSource ? args['dirPath'] : null,
-      typeTag: isFileSource ? entry.typeTag : null,
-      mediaType: isFileSource ? entry.mediaType : null,
+      autoFullScreenFlag: autoFullScreenFlag,
     );
 
     if (isClosed) return;
@@ -764,9 +758,10 @@ class VideoDetailController extends GetxController
   Future<void> queryVideoUrl({
     Duration? defaultST,
     bool fromReset = false,
+    bool autoFullScreenFlag = false,
   }) async {
     if (isFileSource) {
-      return _initPlayerIfNeeded();
+      return _initPlayerIfNeeded(autoFullScreenFlag);
     }
     if (isQuerying) {
       return;
@@ -840,7 +835,7 @@ class VideoDetailController extends GetxController
         setVideoHeight();
         currentDecodeFormats = VideoDecodeFormatType.fromString('avc1');
         currentVideoQa.value = videoQuality;
-        await _initPlayerIfNeeded();
+        await _initPlayerIfNeeded(autoFullScreenFlag);
         isQuerying = false;
         return;
       }
@@ -939,7 +934,7 @@ class VideoDetailController extends GetxController
       } else {
         audioUrl = '';
       }
-      await _initPlayerIfNeeded();
+      await _initPlayerIfNeeded(autoFullScreenFlag);
     } else {
       _autoPlay.value = false;
       videoState.value = result..toast();
@@ -1013,14 +1008,24 @@ class VideoDetailController extends GetxController
 
     Future<void> setSub(({bool isData, String id}) subtitle) async {
       final sub = subtitles[index - 1];
+
+      String subUri = subtitle.id;
+      File? file;
+      if (subtitle.isData) {
+        subUri = path.join(tmpDirPath, '${cid.value}-${sub.lan}.vtt');
+        file = File(subUri);
+        if (!file.existsSync()) {
+          await file.writeAsString(subtitle.id);
+          if (plPlayerController.videoPlayerController?.disposed == false) {
+            plPlayerController.videoPlayerController!.release.add(file.tryDel);
+          } else {
+            file.tryDel();
+            return;
+          }
+        }
+      }
       await plPlayerController.videoPlayerController?.setSubtitleTrack(
-        SubtitleTrack(
-          subtitle.id,
-          sub.lanDoc,
-          sub.lan,
-          uri: !subtitle.isData,
-          data: subtitle.isData,
-        ),
+        SubtitleTrack(subUri, sub.lanDoc, sub.lan, uri: true),
       );
       vttSubtitlesIndex.value = index;
     }

@@ -5,8 +5,8 @@ import 'package:PiliPlus/common/widgets/custom_icon.dart';
 import 'package:PiliPlus/common/widgets/flutter/refresh_indicator.dart';
 import 'package:PiliPlus/common/widgets/gesture/horizontal_drag_gesture_recognizer.dart'
     show touchSlopH;
-import 'package:PiliPlus/common/widgets/image/custom_grid_view.dart'
-    show CustomGridView, ImageModel;
+import 'package:PiliPlus/common/widgets/image_grid/image_grid_view.dart'
+    show ImageGridView, ImageModel;
 import 'package:PiliPlus/common/widgets/pendant_avatar.dart';
 import 'package:PiliPlus/grpc/reply.dart';
 import 'package:PiliPlus/http/fav.dart';
@@ -158,7 +158,7 @@ List<SettingsModel> get extraSettings => [
     leading: const Icon(Icons.photo_outlined),
     setKey: SettingBoxKey.horizontalPreview,
     defaultVal: false,
-    onChanged: (value) => CustomGridView.horizontalPreview = value,
+    onChanged: (value) => ImageGridView.horizontalPreview = value,
   ),
   NormalModel(
     title: '评论折叠行数',
@@ -355,6 +355,13 @@ List<SettingsModel> get extraSettings => [
     defaultVal: false,
   ),
   const SwitchModel(
+    title: '记录评论',
+    leading: Icon(Icons.message_outlined),
+    setKey: SettingBoxKey.saveReply,
+    defaultVal: true,
+    needReboot: true,
+  ),
+  const SwitchModel(
     title: '发评反诈',
     subtitle: '发送评论后检查评论是否可见',
     leading: Stack(
@@ -468,7 +475,7 @@ List<SettingsModel> get extraSettings => [
     leading: const Icon(Icons.menu),
     setKey: SettingBoxKey.enableImgMenu,
     defaultVal: false,
-    onChanged: (value) => CustomGridView.enableImgMenu = value,
+    onChanged: (value) => ImageGridView.enableImgMenu = value,
   ),
   SwitchModel(
     setKey: SettingBoxKey.feedBackEnable,
@@ -1111,7 +1118,7 @@ Future<void> _showReplySortDialog(
     builder: (context) => SelectDialog<ReplySortType>(
       title: '评论展示',
       value: Pref.replySortType,
-      values: ReplySortType.values.map((e) => (e, e.title)).toList(),
+      values: ReplySortType.values.take(2).map((e) => (e, e.title)).toList(),
     ),
   );
   if (res != null) {

@@ -16,11 +16,11 @@
  */
 
 import 'dart:io' show Platform;
-import 'dart:math' show min;
 
 import 'package:PiliPlus/common/constants.dart';
 import 'package:PiliPlus/common/widgets/badge.dart';
 import 'package:PiliPlus/common/widgets/image/network_img_layer.dart';
+import 'package:PiliPlus/common/widgets/image_grid/image_grid_builder.dart';
 import 'package:PiliPlus/models/common/badge_type.dart';
 import 'package:PiliPlus/models/common/image_preview_type.dart';
 import 'package:PiliPlus/utils/extension/context_ext.dart';
@@ -30,14 +30,7 @@ import 'package:PiliPlus/utils/image_utils.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
-import 'package:flutter/material.dart'
-    hide CustomMultiChildLayout, MultiChildLayoutDelegate;
-import 'package:flutter/rendering.dart'
-    show
-        ContainerRenderObjectMixin,
-        RenderBoxContainerDefaultsMixin,
-        MultiChildLayoutParentData,
-        BoxHitTestResult;
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:get/get_core/src/get_main.dart';
 import 'package:get/get_navigation/get_navigation.dart';
@@ -68,18 +61,14 @@ class ImageModel {
   static bool enableLivePhoto = Pref.enableLivePhoto;
 }
 
-class CustomGridView extends StatelessWidget {
-  const CustomGridView({
+class ImageGridView extends StatelessWidget {
+  const ImageGridView({
     super.key,
-    this.space = 5,
-    required this.maxWidth,
     required this.picArr,
     this.onViewImage,
     this.fullScreen = false,
   });
 
-  final double maxWidth;
-  final double space;
   final List<ImageModel> picArr;
   final VoidCallback? onViewImage;
   final bool fullScreen;
@@ -87,7 +76,7 @@ class CustomGridView extends StatelessWidget {
   static bool horizontalPreview = Pref.horizontalPreview;
   static const _routes = ['/videoV', '/dynamicDetail'];
 
-  void onTap(BuildContext context, int index) {
+  void _onTap(BuildContext context, int index) {
     final imgList = picArr.map(
       (item) {
         bool isLive = item.isLivePhoto;
@@ -149,8 +138,9 @@ class CustomGridView extends StatelessWidget {
 
   static bool enableImgMenu = Pref.enableImgMenu;
 
-  void _showMenu(BuildContext context, Offset offset, ImageModel item) {
+  void _showMenu(BuildContext context, int index, Offset offset) {
     HapticFeedback.mediumImpact();
+    final item = picArr[index];
     showMenu(
       context: context,
       position: PageUtils.menuPosition(offset),
@@ -199,72 +189,50 @@ class CustomGridView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    double imageWidth;
-    double imageHeight;
-    final length = picArr.length;
-    final isSingle = length == 1;
-    final isFour = length == 4;
-    if (length == 2) {
-      imageWidth = imageHeight = (maxWidth - space) / 2;
-    } else {
-      imageHeight = imageWidth = (maxWidth - 2 * space) / 3;
-      if (isSingle) {
-        final img = picArr.first;
-        final width = img.width;
-        final height = img.height;
-        final ratioWH = width / height;
-        final ratioHW = height / width;
-        imageWidth = ratioWH > 1.5
-            ? maxWidth
-            : (ratioWH >= 1 || (height > width && ratioHW < 1.5))
-            ? 2 * imageWidth
-            : 1.5 * imageWidth;
-        if (width != 1) {
-          imageWidth = min(imageWidth, width.toDouble());
-        }
-        imageHeight = imageWidth * min(ratioHW, StyleString.imgMaxRatio);
-      }
-    }
-
-    final int column = isFour ? 2 : 3;
-    final int row = isFour ? 2 : (length / 3).ceil();
-    late final placeHolder = Container(
-      width: imageWidth,
-      height: imageHeight,
-      decoration: BoxDecoration(
-        color: Theme.of(
-          context,
-        ).colorScheme.onInverseSurface.withValues(alpha: 0.4),
-      ),
-      child: Image.asset(
-        'assets/images/loading.png',
-        width: imageWidth,
-        height: imageHeight,
-        cacheWidth: imageWidth.cacheSize(context),
-      ),
-    );
-
     return Padding(
-      padding: const EdgeInsets.only(top: 6),
-      child: SizedBox(
-        width: maxWidth,
-        height: imageHeight * row + space * (row - 1),
-        child: ImageGrid(
-          space: space,
-          column: column,
-          width: imageWidth,
-          height: imageHeight,
-          children: List.generate(length, (index) {
+      padding: const .only(top: 6),
+      child: ImageGridBuilder(
+        picArr: picArr,
+        onTap: (index) => _onTap(context, index),
+        onSecondaryTapUp: enableImgMenu && PlatformUtils.isDesktop
+            ? (index, offset) => _showMenu(context, index, offset)
+            : null,
+        onLongPressStart: enableImgMenu && PlatformUtils.isMobile
+            ? (index, offset) => _showMenu(context, index, offset)
+            : null,
+        builder: (BuildContext context, ImageGridInfo info) {
+          final width = info.size.width;
+          final height = info.size.height;
+          late final placeHolder = Container(
+            width: width,
+            height: height,
+            decoration: BoxDecoration(
+              color: Theme.of(
+                context,
+              ).colorScheme.onInverseSurface.withValues(alpha: 0.4),
+            ),
+            child: Image.asset(
+              'assets/images/loading.png',
+              width: width,
+              height: height,
+              cacheWidth: width.cacheSize(context),
+            ),
+          );
+          return List.generate(picArr.length, (index) {
             final item = picArr[index];
-            final borderRadius = _borderRadius(column, length, index);
+            final borderRadius = _borderRadius(
+              info.column,
+              picArr.length,
+              index,
+            );
             Widget child = Stack(
               clipBehavior: Clip.none,
               alignment: Alignment.center,
               children: [
                 NetworkImgLayer(
                   src: item.url,
-                  width: imageWidth,
-                  height: imageHeight,
+                  width: width,
+                  height: height,
                   borderRadius: borderRadius,
                   alignment: item.isLongPic ? .topCenter : .center,
                   cacheWidth: item.width <= item.height,
@@ -293,152 +261,11 @@ class CustomGridView extends StatelessWidget {
             }
             return LayoutId(
               id: index,
-              child: GestureDetector(
-                onTap: () => onTap(context, index),
-                onSecondaryTapUp: enableImgMenu && PlatformUtils.isDesktop
-                    ? (details) =>
-                          _showMenu(context, details.globalPosition, item)
-                    : null,
-                onLongPressStart: enableImgMenu && PlatformUtils.isMobile
-                    ? (details) =>
-                          _showMenu(context, details.globalPosition, item)
-                    : null,
-                child: child,
-              ),
+              child: child,
             );
-          }),
-        ),
+          });
+        },
       ),
     );
   }
-}
-
-class ImageGrid extends MultiChildRenderObjectWidget {
-  const ImageGrid({
-    super.key,
-    super.children,
-    required this.space,
-    required this.column,
-    required this.width,
-    required this.height,
-  });
-
-  final double space;
-  final int column;
-  final double width;
-  final double height;
-
-  @override
-  RenderObject createRenderObject(BuildContext context) {
-    return RenderImageGrid(
-      space: space,
-      column: column,
-      width: width,
-      height: height,
-    );
-  }
-
-  @override
-  void updateRenderObject(BuildContext context, RenderImageGrid renderObject) {
-    renderObject
-      ..space = space
-      ..column = column
-      ..width = width
-      ..height = height;
-  }
-}
-
-class RenderImageGrid extends RenderBox
-    with
-        ContainerRenderObjectMixin<RenderBox, MultiChildLayoutParentData>,
-        RenderBoxContainerDefaultsMixin<RenderBox, MultiChildLayoutParentData> {
-  RenderImageGrid({
-    required double space,
-    required int column,
-    required double width,
-    required double height,
-  }) : _space = space,
-       _column = column,
-       _width = width,
-       _height = height;
-
-  double _space;
-  double get space => _space;
-  set space(double value) {
-    if (_space == value) return;
-    _space = value;
-    markNeedsLayout();
-  }
-
-  int _column;
-  int get column => _column;
-  set column(int value) {
-    if (_column == value) return;
-    _column = value;
-    markNeedsLayout();
-  }
-
-  double _width;
-  double get width => _width;
-  set width(double value) {
-    if (_width == value) return;
-    _width = value;
-    markNeedsLayout();
-  }
-
-  double _height;
-  double get height => _height;
-  set height(double value) {
-    if (_height == value) return;
-    _height = value;
-    markNeedsLayout();
-  }
-
-  @override
-  void setupParentData(RenderBox child) {
-    if (child.parentData is! MultiChildLayoutParentData) {
-      child.parentData = MultiChildLayoutParentData();
-    }
-  }
-
-  @override
-  void performLayout() {
-    size = constraints.constrain(constraints.biggest);
-
-    final itemConstraints = BoxConstraints(
-      minWidth: width,
-      maxWidth: width,
-      minHeight: height,
-      maxHeight: height,
-    );
-    RenderBox? child = firstChild;
-    while (child != null) {
-      final childParentData = child.parentData as MultiChildLayoutParentData;
-      final index = childParentData.id as int;
-      child.layout(itemConstraints, parentUsesSize: true);
-      childParentData.offset = Offset(
-        (space + width) * (index % column),
-        (space + height) * (index ~/ column),
-      );
-      child = childParentData.nextSibling;
-    }
-  }
-
-  @override
-  void paint(PaintingContext context, Offset offset) {
-    RenderBox? child = firstChild;
-    while (child != null) {
-      final childParentData = child.parentData as MultiChildLayoutParentData;
-      context.paintChild(child, childParentData.offset + offset);
-      child = childParentData.nextSibling;
-    }
-  }
-
-  @override
-  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) {
-    return defaultHitTestChildren(result, position: position);
-  }
-
-  @override
-  bool get isRepaintBoundary => true;
 }

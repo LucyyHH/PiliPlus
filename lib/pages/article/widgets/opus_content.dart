@@ -1,9 +1,11 @@
 import 'dart:math' as math;
 
+import 'package:PiliPlus/common/widgets/flutter/layout_builder.dart';
 import 'package:PiliPlus/common/widgets/gesture/tap_gesture_recognizer.dart';
 import 'package:PiliPlus/common/widgets/image/cached_network_svg_image.dart';
-import 'package:PiliPlus/common/widgets/image/custom_grid_view.dart';
 import 'package:PiliPlus/common/widgets/image/network_img_layer.dart';
+import 'package:PiliPlus/common/widgets/image_grid/image_grid_view.dart';
+import 'package:PiliPlus/common/widgets/image_viewer/hero.dart';
 import 'package:PiliPlus/http/constants.dart';
 import 'package:PiliPlus/models/common/image_preview_type.dart';
 import 'package:PiliPlus/models/common/image_type.dart';
@@ -19,7 +21,7 @@ import 'package:PiliPlus/utils/image_utils.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide LayoutBuilder;
 import 'package:get/get_core/src/get_main.dart';
 import 'package:get/get_navigation/src/extension_navigation.dart';
 import 'package:material_design_icons_flutter/material_design_icons_flutter.dart';
@@ -222,30 +224,31 @@ class OpusContent extends StatelessWidget {
                     ? null
                     : width * pic.height! / pic.width!;
                 width ??= maxWidth;
+                Widget child = CachedNetworkImage(
+                  width: width,
+                  height: height,
+                  memCacheWidth: width.cacheSize(context),
+                  imageUrl: ImageUtils.thumbnailUrl(pic.url!, 60),
+                  fadeInDuration: const Duration(milliseconds: 120),
+                  fadeOutDuration: const Duration(milliseconds: 120),
+                  placeholder: (_, _) =>
+                      Image.asset('assets/images/loading.png'),
+                );
+                if (!(pic.isLongPic ?? false)) {
+                  child = fromHero(
+                    tag: pic.url!,
+                    child: child,
+                  );
+                }
                 return GestureDetector(
                   onTap: () => PageUtils.imageView(
                     imgList: [SourceModel(url: pic.url!)],
                     quality: 60,
                   ),
-                  child: Center(
-                    child: Hero(
-                      tag: pic.url!,
-                      child: CachedNetworkImage(
-                        width: width,
-                        height: height,
-                        memCacheWidth: width.cacheSize(context),
-                        imageUrl: ImageUtils.thumbnailUrl(pic.url!, 60),
-                        fadeInDuration: const Duration(milliseconds: 120),
-                        fadeOutDuration: const Duration(milliseconds: 120),
-                        placeholder: (_, _) =>
-                            Image.asset('assets/images/loading.png'),
-                      ),
-                    ),
-                  ),
+                  child: child,
                 );
               } else {
-                return CustomGridView(
-                  maxWidth: maxWidth,
+                return ImageGridView(
                   picArr: element.pic!.pics!
                       .map(
                         (e) => ImageModel(
@@ -709,7 +712,6 @@ Widget moduleBlockedItem(
   BuildContext context,
   ThemeData theme,
   ModuleBlocked moduleBlocked,
-  double maxWidth,
 ) {
   late final isDarkMode = theme.brightness.isDark;
 
@@ -782,35 +784,41 @@ Widget moduleBlockedItem(
   }
 
   if (moduleBlocked.blockedType == 1) {
-    maxWidth = maxWidth <= 255 ? maxWidth : math.min(400, maxWidth * 0.8);
-    return UnconstrainedBox(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        width: maxWidth,
-        height: maxWidth,
-        decoration: bgImg(),
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (moduleBlocked.icon != null) icon(math.max(40, maxWidth / 7)),
-            if (moduleBlocked.hintMessage?.isNotEmpty == true) ...[
-              const SizedBox(height: 5),
-              Text(
-                moduleBlocked.hintMessage!,
-                textAlign: TextAlign.center,
-                style: TextStyle(color: theme.colorScheme.outline),
-              ),
-            ],
-            if (moduleBlocked.button != null) ...[
-              const SizedBox(height: 8),
-              btn(
-                context,
-                visualDensity: const VisualDensity(vertical: -2.5),
-              ),
-            ],
-          ],
-        ),
+    return Align(
+      alignment: .centerLeft,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          var maxWidth = constraints.maxWidth;
+          maxWidth = maxWidth <= 255 ? maxWidth : math.min(400, maxWidth * 0.8);
+          return Container(
+            width: maxWidth,
+            height: maxWidth,
+            decoration: bgImg(),
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (moduleBlocked.icon != null)
+                  icon(math.max(40, maxWidth / 7)),
+                if (moduleBlocked.hintMessage?.isNotEmpty == true) ...[
+                  const SizedBox(height: 5),
+                  Text(
+                    moduleBlocked.hintMessage!,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: theme.colorScheme.outline),
+                  ),
+                ],
+                if (moduleBlocked.button != null) ...[
+                  const SizedBox(height: 8),
+                  btn(
+                    context,
+                    visualDensity: const VisualDensity(vertical: -2.5),
+                  ),
+                ],
+              ],
+            ),
+          );
+        },
       ),
     );
   }

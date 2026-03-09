@@ -28,7 +28,7 @@ import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/danmaku_options.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/fullscreen.dart';
-import 'package:PiliPlus/plugin/pl_player/view.dart';
+import 'package:PiliPlus/plugin/pl_player/view/view.dart';
 import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/utils/extension/num_ext.dart';
 import 'package:PiliPlus/utils/extension/size_ext.dart';
@@ -75,11 +75,9 @@ class _LiveRoomPageState extends State<LiveRoomPage>
       LiveRoomController(heroTag),
       tag: heroTag,
     );
-    plPlayerController = _liveRoomController.plPlayerController;
-    PlPlayerController.setPlayCallBack(plPlayerController.play);
-    plPlayerController
-      ..autoEnterFullscreen()
+    plPlayerController = _liveRoomController.plPlayerController
       ..addStatusLister(playerListener);
+    PlPlayerController.setPlayCallBack(plPlayerController.play);
   }
 
   @override
@@ -714,7 +712,7 @@ class _LiveRoomPageState extends State<LiveRoomPage>
         ..savedDanmaku = [
           RichTextItem.fromStart(
             '@${item.name} ',
-            rawText: item.uid.toString(),
+            rawText: item.extra.mid.toString(),
             type: .at,
             id: item.extra.id.toString(),
           ),
@@ -727,9 +725,7 @@ class _LiveRoomPageState extends State<LiveRoomPage>
           ? PageView<CustomHorizontalDragGestureRecognizer>(
               key: pageKey,
               controller: _liveRoomController.pageController,
-              physics: const CustomTabBarViewScrollPhysics(
-                parent: ClampingScrollPhysics(),
-              ),
+              physics: clampingScrollPhysics,
               onPageChanged: (value) =>
                   _liveRoomController.pageIndex.value = value,
               horizontalDragGestureRecognizer:
@@ -997,12 +993,15 @@ class _RenderBorderIndicator extends RenderBox {
     final size = this.size;
     final canvas = context.canvas;
     final width = size.width / 2;
-    if (!_isLeft) {
-      canvas.translate(width, 0);
-    }
+
     BoxBorder.paintNonUniformBorder(
       canvas,
-      Rect.fromLTRB(0, 0, width, size.height),
+      Rect.fromLTWH(
+        offset.dx + (_isLeft ? 0 : width),
+        offset.dy,
+        width,
+        size.height,
+      ),
       borderRadius: BorderRadius.only(
         topLeft: _isLeft ? _radius : .zero,
         topRight: _isLeft ? .zero : _radius,
@@ -1012,9 +1011,6 @@ class _RenderBorderIndicator extends RenderBox {
       color: Colors.white38,
     );
   }
-
-  @override
-  bool get isRepaintBoundary => true;
 }
 
 class LiveDanmaku extends StatefulWidget {

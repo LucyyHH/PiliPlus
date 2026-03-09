@@ -17,6 +17,7 @@ import 'package:PiliPlus/utils/extension/get_ext.dart';
 import 'package:PiliPlus/utils/extension/num_ext.dart';
 import 'package:PiliPlus/utils/extension/theme_ext.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
+import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/utils.dart';
 import 'package:flutter/material.dart' hide ListTile;
 import 'package:get/get.dart';
@@ -78,7 +79,6 @@ class _MediaPageState extends CommonPageState<MinePage>
               child: onBuild(
                 ListView(
                   padding: const .only(bottom: 100),
-                  controller: controller.scrollController,
                   physics: const AlwaysScrollableScrollPhysics(),
                   children: [
                     _buildUserInfo(theme, secondary),
@@ -161,6 +161,15 @@ class _MediaPageState extends CommonPageState<MinePage>
           ),
           msgBadge(_mainController),
         ],
+        if (GStorage.reply != null)
+          IconButton(
+            iconSize: iconSize,
+            padding: padding,
+            style: style,
+            tooltip: '评论记录',
+            onPressed: () => Get.toNamed('/myReply'),
+            icon: const Icon(Icons.message_outlined),
+          ),
         Obx(
           () {
             final anonymity = MineController.anonymity.value;
@@ -431,6 +440,11 @@ class _MediaPageState extends CommonPageState<MinePage>
     );
   }
 
+  void _autoRefresh() => Future.delayed(
+    const Duration(milliseconds: 150),
+    () => controller.onRefresh(isManual: false),
+  );
+
   Widget _buildFav(ThemeData theme, Color secondary) {
     return Column(
       children: [
@@ -439,12 +453,7 @@ class _MediaPageState extends CommonPageState<MinePage>
           color: theme.dividerColor.withValues(alpha: 0.1),
         ),
         ListTile(
-          onTap: () => Get.toNamed('/fav')?.whenComplete(
-            () => Future.delayed(
-              const Duration(milliseconds: 150),
-              controller.onRefresh,
-            ),
-          ),
+          onTap: () => Get.toNamed('/fav')?.whenComplete(_autoRefresh),
           dense: true,
           title: Padding(
             padding: const EdgeInsets.only(left: 10),
@@ -505,6 +514,7 @@ class _MediaPageState extends CommonPageState<MinePage>
           return SizedBox(
             height: 200,
             child: ListView.separated(
+              controller: controller.scrollController,
               padding: const .only(left: 20, top: 10, right: 20),
               itemCount: response.list.length + (flag ? 1 : 0),
               itemBuilder: (context, index) {
@@ -522,12 +532,8 @@ class _MediaPageState extends CommonPageState<MinePage>
                             ),
                           ),
                         ),
-                        onPressed: () => Get.toNamed('/fav')?.whenComplete(
-                          () => Future.delayed(
-                            const Duration(milliseconds: 150),
-                            controller.onRefresh,
-                          ),
-                        ),
+                        onPressed: () =>
+                            Get.toNamed('/fav')?.whenComplete(_autoRefresh),
                         icon: Icon(
                           Icons.arrow_forward_ios,
                           size: 18,
@@ -540,10 +546,7 @@ class _MediaPageState extends CommonPageState<MinePage>
                   return FavFolderItem(
                     heroTag: Utils.generateRandomString(8),
                     item: response.list[index],
-                    onPop: () => Future.delayed(
-                      const Duration(milliseconds: 150),
-                      controller.onRefresh,
-                    ),
+                    onPop: _autoRefresh,
                   );
                 }
               },
