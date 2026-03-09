@@ -55,6 +55,7 @@ class DownloadService extends GetxService {
   DownloadManager? _audioDownloadManager;
 
   bool _isForegroundServiceRunning = false;
+  bool _isStartPending = false;
 
   Future<void> _startForegroundService() async {
     if (!_isForegroundServiceRunning) {
@@ -263,7 +264,8 @@ class DownloadService extends GetxService {
       ..entryDirPath = entryDir.path
       ..status = DownloadStatus.wait;
     waitDownloadQueue.add(entry);
-    if (curDownload.value?.status.isDownloading != true) {
+    if (!_isStartPending && curDownload.value?.status.isDownloading != true) {
+      _isStartPending = true;
       startDownload(entry);
     }
   }
@@ -297,6 +299,7 @@ class DownloadService extends GetxService {
 
   Future<void> startDownload(BiliDownloadEntryInfo entry) {
     return _lock.synchronized(() async {
+      _isStartPending = false;
       await _downloadManager?.cancel(isDelete: false);
       await _audioDownloadManager?.cancel(isDelete: false);
       _downloadManager = null;
