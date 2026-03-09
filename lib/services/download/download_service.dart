@@ -386,6 +386,7 @@ class DownloadService extends GetxService {
   Future<void> _startDownload(BiliDownloadEntryInfo entry) async {
     try {
       if (!await downloadDanmaku(entry: entry)) {
+        _stopForegroundService();
         return;
       }
 
@@ -410,6 +411,7 @@ class DownloadService extends GetxService {
       ]);
 
       if (curDownload.value?.cid != entry.cid) {
+        _stopForegroundService();
         return;
       }
 

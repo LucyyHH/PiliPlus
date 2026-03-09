@@ -83,7 +83,7 @@ class DownloadForegroundService : Service() {
                 PowerManager.PARTIAL_WAKE_LOCK,
                 "PiliPlus:DownloadWakeLock"
             )
-            wakeLock?.acquire(10 * 60 * 60 * 1000L) // 10 hours max as safety net
+            wakeLock?.acquire(2 * 60 * 60 * 1000L) // 2 hours max as safety net
         }
     }
 

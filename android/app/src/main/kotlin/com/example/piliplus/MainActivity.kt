@@ -157,10 +157,12 @@ class MainActivity : AudioServiceActivity() {
                 }
 
                 "stopDownloadService" -> {
-                    val intent = Intent(this, DownloadForegroundService::class.java).apply {
-                        action = DownloadForegroundService.ACTION_STOP
+                    if (DownloadForegroundService.isRunning) {
+                        val intent = Intent(this, DownloadForegroundService::class.java).apply {
+                            action = DownloadForegroundService.ACTION_STOP
+                        }
+                        startService(intent)
                     }
-                    startService(intent)
                     result.success(null)
                 }
 
