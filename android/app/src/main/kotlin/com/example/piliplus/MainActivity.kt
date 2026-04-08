@@ -23,7 +23,6 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import kotlin.math.roundToInt
 import kotlin.system.exitProcess
-import java.io.File
 
 class MainActivity : AudioServiceActivity() {
     private lateinit var methodChannel: MethodChannel
@@ -141,6 +140,7 @@ class MainActivity : AudioServiceActivity() {
                             .build()
                         setPictureInPictureParams(params)
                     }
+                    result.success(null)
                 }
 
                 "createShortcut" -> {
@@ -170,9 +170,52 @@ class MainActivity : AudioServiceActivity() {
                                     pendingIntent.intentSender
                                 )
                             }
-                        } catch (e: Exception) {
+                        } catch (_: Exception) {
                         }
                     }
+                    result.success(null)
+                }
+
+                "startDownloadService" -> {
+                    val intent = Intent(this, DownloadForegroundService::class.java).apply {
+                        action = DownloadForegroundService.ACTION_START
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(intent)
+                    } else {
+                        startService(intent)
+                    }
+                    result.success(null)
+                }
+
+                "updateDownloadProgress" -> {
+                    val intent = Intent(this, DownloadForegroundService::class.java).apply {
+                        action = DownloadForegroundService.ACTION_UPDATE
+                        putExtra(
+                            DownloadForegroundService.EXTRA_TITLE,
+                            call.argument<String>("title") ?: "正在下载..."
+                        )
+                        putExtra(
+                            DownloadForegroundService.EXTRA_PROGRESS,
+                            (call.argument<Number>("progress") ?: 0).toLong()
+                        )
+                        putExtra(
+                            DownloadForegroundService.EXTRA_TOTAL,
+                            (call.argument<Number>("total") ?: 0).toLong()
+                        )
+                    }
+                    startService(intent)
+                    result.success(null)
+                }
+
+                "stopDownloadService" -> {
+                    if (DownloadForegroundService.isRunning) {
+                        val intent = Intent(this, DownloadForegroundService::class.java).apply {
+                            action = DownloadForegroundService.ACTION_STOP
+                        }
+                        startService(intent)
+                    }
+                    result.success(null)
                 }
 
                 "maxScreenSize" -> {

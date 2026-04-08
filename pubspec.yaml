@@ -236,6 +236,7 @@ dependencies:
   dlna_dart: ^0.1.0
   battery_plus: ^7.0.0
   material_new_shapes: ^1.0.0
+  flutter_native_splash: ^2.4.6
 
   vector_math: any
   fixnum: any
@@ -309,7 +310,6 @@ dev_dependencies:
   flutter_launcher_icons: ^0.14.4
   # hive_generator: ^2.0.1
   build_runner: ^2.10.3
-  flutter_native_splash: ^2.4.6
 
 flutter_launcher_icons:
   android: true

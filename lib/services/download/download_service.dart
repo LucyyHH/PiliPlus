@@ -15,6 +15,7 @@ import 'package:PiliPlus/models_new/video/video_detail/data.dart';
 import 'package:PiliPlus/models_new/video/video_detail/episode.dart' as ugc;
 import 'package:PiliPlus/models_new/video/video_detail/page.dart';
 import 'package:PiliPlus/pages/danmaku/controller.dart';
+import 'package:PiliPlus/services/download/download_foreground_service.dart';
 import 'package:PiliPlus/services/download/download_manager.dart';
 import 'package:PiliPlus/utils/extension/file_ext.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
@@ -39,8 +40,7 @@ class DownloadService extends GetxService {
   final waitDownloadQueue = RxList<BiliDownloadEntryInfo>();
   final downloadList = <BiliDownloadEntryInfo>[];
 
-  int? _curCid;
-  int? get curCid => _curCid;
+  int? get curCid => _activeContext?.entry.cid;
   final curDownload = Rxn<BiliDownloadEntryInfo>();
   void _updateCurStatus(DownloadStatus status) {
     if (curDownload.value != null) {
@@ -50,8 +50,128 @@ class DownloadService extends GetxService {
     }
   }
 
-  DownloadManager? _downloadManager;
-  DownloadManager? _audioDownloadManager;
+  void _setActivePhase(
+    _ActiveDownloadContext context,
+    _ActiveDownloadPhase phase,
+  ) {
+    context
+      ..phase = phase
+      ..failureReason = null;
+    _updateCurStatus(phase.status);
+  }
+
+  void _setActiveFailure(
+    _ActiveDownloadContext context,
+    _ActiveDownloadFailureReason reason,
+  ) {
+    context.failureReason = reason;
+    _updateCurStatus(reason.status);
+  }
+
+  bool _isForegroundServiceRunning = false;
+  bool _isStartPending = false;
+  int _sessionSeed = 0;
+  _ActiveDownloadContext? _activeContext;
+
+  Future<void> _startForegroundService() async {
+    if (_isForegroundServiceRunning) return;
+    _isForegroundServiceRunning = true;
+    await DownloadForegroundService.start();
+  }
+
+  void _stopForegroundService({
+    BiliDownloadEntryInfo? entry,
+    bool forceLastProgress = false,
+  }) {
+    if (!_isForegroundServiceRunning) return;
+    _isForegroundServiceRunning = false;
+    unawaited(
+      DownloadForegroundService.stop(
+        title: forceLastProgress ? entry?.title : null,
+        progress: forceLastProgress ? entry?.downloadedBytes : null,
+        total: forceLastProgress ? entry?.totalBytes : null,
+      ),
+    );
+  }
+
+  void _syncForegroundProgress(
+    BiliDownloadEntryInfo entry, {
+    bool force = false,
+  }) {
+    if (!_isForegroundServiceRunning) return;
+    DownloadForegroundService.updateProgress(
+      title: entry.title,
+      progress: entry.downloadedBytes,
+      total: entry.totalBytes,
+      force: force,
+    );
+  }
+
+  _ActiveDownloadContext _beginDownloadSession(BiliDownloadEntryInfo entry) {
+    final context = _ActiveDownloadContext(
+      sessionId: ++_sessionSeed,
+      entry: entry,
+    );
+    _activeContext = context;
+    curDownload.value = entry;
+    waitDownloadQueue.refresh();
+    return context;
+  }
+
+  bool _isActiveContext(_ActiveDownloadContext context) {
+    return _activeContext?.sessionId == context.sessionId &&
+        curDownload.value?.cid == context.entry.cid;
+  }
+
+  Future<void> _cancelActiveManagers({required bool isDelete}) async {
+    await _activeContext?.downloadManager?.cancel(isDelete: isDelete);
+    await _activeContext?.audioDownloadManager?.cancel(isDelete: isDelete);
+    if (_activeContext case final context?) {
+      context
+        ..downloadManager = null
+        ..audioDownloadManager = null;
+    }
+  }
+
+  void _clearActiveDownload({bool clearCurrent = true}) {
+    if (_activeContext case final context?) {
+      context
+        ..downloadManager = null
+        ..audioDownloadManager = null;
+    }
+    if (clearCurrent) {
+      _activeContext = null;
+      curDownload.value = null;
+      waitDownloadQueue.refresh();
+    }
+  }
+
+  BiliDownloadEntryInfo? _nextQueuedEntry({int? excludingCid}) {
+    for (final entry in waitDownloadQueue) {
+      if (entry.cid != excludingCid) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  void _applyActiveTransition(_ActiveDownloadTransition transition) {
+    final entry = transition.entry;
+    _clearActiveDownload();
+    if (transition.downloadNext) {
+      final nextEntry = _nextQueuedEntry(excludingCid: transition.excludingCid);
+      if (nextEntry != null) {
+        startDownload(nextEntry);
+        return;
+      }
+    }
+    if (transition.stopForeground) {
+      _stopForegroundService(
+        entry: entry,
+        forceLastProgress: transition.forceLastProgress,
+      );
+    }
+  }
 
   late Future<void> waitForInitialization;
 
@@ -246,7 +366,8 @@ class DownloadService extends GetxService {
       ..entryDirPath = entryDir.path
       ..status = DownloadStatus.wait;
     waitDownloadQueue.add(entry);
-    if (curDownload.value?.status.isDownloading != true) {
+    if (!_isStartPending && curDownload.value?.status.isDownloading != true) {
+      _isStartPending = true;
       startDownload(entry);
     }
   }
@@ -280,26 +401,35 @@ class DownloadService extends GetxService {
 
   Future<void> startDownload(BiliDownloadEntryInfo entry) {
     return _lock.synchronized(() async {
-      await _downloadManager?.cancel(isDelete: false);
-      await _audioDownloadManager?.cancel(isDelete: false);
-      _downloadManager = null;
-      _audioDownloadManager = null;
-      if (curDownload.value case final curEntry?) {
+      _isStartPending = false;
+      final previousEntry = curDownload.value;
+      await _cancelActiveManagers(isDelete: false);
+      if (previousEntry case final curEntry?) {
         if (curEntry.status.isDownloading) {
           curEntry.status = DownloadStatus.pause;
         }
       }
 
-      _curCid = entry.cid;
-      curDownload.value = entry;
-      waitDownloadQueue.refresh();
-      await _startDownload(entry);
+      final context = _beginDownloadSession(entry);
+      await _startForegroundService();
+      await _startDownload(context);
     });
   }
 
   Future<bool> downloadDanmaku({
     required BiliDownloadEntryInfo entry,
     bool isUpdate = false,
+  }) {
+    return _downloadDanmaku(
+      entry: entry,
+      isUpdate: isUpdate,
+    );
+  }
+
+  Future<bool> _downloadDanmaku({
+    required BiliDownloadEntryInfo entry,
+    required bool isUpdate,
+    _ActiveDownloadContext? context,
   }) async {
     final cid = entry.pageData?.cid ?? entry.source?.cid;
     if (cid == null) {
@@ -333,7 +463,11 @@ class DownloadService extends GetxService {
         return true;
       } catch (e) {
         if (!isUpdate) {
-          _updateCurStatus(DownloadStatus.failDanmaku);
+          if (context != null && _isActiveContext(context)) {
+            _setActiveFailure(context, _ActiveDownloadFailureReason.danmaku);
+          } else {
+            _updateCurStatus(DownloadStatus.failDanmaku);
+          }
         }
         if (kDebugMode) SmartDialog.showToast(e.toString());
         return false;
@@ -364,80 +498,106 @@ class DownloadService extends GetxService {
     }
   }
 
-  Future<void> _startDownload(BiliDownloadEntryInfo entry) async {
+  Future<void> _startDownload(_ActiveDownloadContext context) async {
+    final entry = context.entry;
     try {
-      if (!await downloadDanmaku(entry: entry)) {
-        return;
-      }
-
-      _updateCurStatus(DownloadStatus.getPlayUrl);
-
-      final mediaFileInfo = await DownloadHttp.getVideoUrl(
-        entry: entry,
-        ep: entry.ep,
-        source: entry.source,
-        pageData: entry.pageData,
-      );
-
-      final videoDir = Directory(path.join(entry.entryDirPath, entry.typeTag));
-      if (!videoDir.existsSync()) {
-        await videoDir.create(recursive: true);
-      }
-
-      final mediaJsonFile = File(path.join(videoDir.path, _indexFile));
-      await Future.wait([
-        mediaJsonFile.writeAsString(jsonEncode(mediaFileInfo.toJson())),
-        _downloadCover(entry: entry),
-      ]);
-
-      if (curDownload.value?.cid != entry.cid) {
-        return;
-      }
-
-      switch (mediaFileInfo) {
-        case Type1 mediaFileInfo:
-          final first = mediaFileInfo.segmentList.first;
-          _downloadManager = DownloadManager(
-            url: first.url,
-            path: path.join(videoDir.path, PathUtils.videoNameType1),
-            onReceiveProgress: _onReceive,
-            onDone: _onDone,
-          );
-          break;
-        case Type2 mediaFileInfo:
-          _downloadManager = DownloadManager(
-            url: mediaFileInfo.video.first.baseUrl,
-            path: path.join(videoDir.path, PathUtils.videoNameType2),
-            onReceiveProgress: _onReceive,
-            onDone: _onDone,
-          );
-          final audio = mediaFileInfo.audio;
-          if (audio != null && audio.isNotEmpty) {
-            _audioDownloadManager = DownloadManager(
-              url: audio.first.baseUrl,
-              path: path.join(videoDir.path, PathUtils.audioNameType2),
-              onReceiveProgress: null,
-              onDone: _onAudioDone,
-            );
-          }
-          late final first = mediaFileInfo.video.first;
-          entry.pageData
-            ?..width = first.width
-            ..height = first.height;
-          entry.ep
-            ?..width = first.width
-            ..height = first.height;
-          _updateBiliDownloadEntryJson(entry);
-          break;
-        default:
-          break;
-      }
+      final preparedStage =
+          await _DownloadPreparationCoordinator(
+            service: this,
+            context: context,
+          ).run();
+      if (preparedStage == null || !_isActiveContext(context)) return;
+      _launchMediaDownloadStage(context, preparedStage);
     } catch (e) {
-      _updateCurStatus(DownloadStatus.failPlayUrl);
+      if (!_isActiveContext(context)) return;
+      _setActiveFailure(context, _ActiveDownloadFailureReason.playUrl);
+      _applyActiveTransition(_ActiveDownloadTransition.failed(entry));
       if (kDebugMode) {
         debugPrint('get download url error: $e');
       }
     }
+  }
+
+  void _launchMediaDownloadStage(
+    _ActiveDownloadContext context,
+    _PreparedDownloadStage stage,
+  ) {
+    final entry = stage.entry;
+    final videoDir = stage.videoDir;
+    switch (stage.mediaFileInfo) {
+      case Type1 mediaFileInfo:
+        _setActivePhase(context, _ActiveDownloadPhase.downloadingMedia);
+        final first = mediaFileInfo.segmentList.first;
+        context.downloadManager = DownloadManager(
+          url: first.url,
+          path: path.join(videoDir.path, PathUtils.videoNameType1),
+          onReceiveProgress: (progress, total) =>
+              _onReceive(context, progress, total),
+          onDone: ([error]) => _onDone(context, error),
+        );
+        break;
+      case Type2 mediaFileInfo:
+        _setActivePhase(context, _ActiveDownloadPhase.downloadingMedia);
+        context.downloadManager = DownloadManager(
+          url: mediaFileInfo.video.first.baseUrl,
+          path: path.join(videoDir.path, PathUtils.videoNameType2),
+          onReceiveProgress: (progress, total) =>
+              _onReceive(context, progress, total),
+          onDone: ([error]) => _onDone(context, error),
+        );
+        final audio = mediaFileInfo.audio;
+        if (audio != null && audio.isNotEmpty) {
+          context.audioDownloadManager = DownloadManager(
+            url: audio.first.baseUrl,
+            path: path.join(videoDir.path, PathUtils.audioNameType2),
+            onReceiveProgress: null,
+            onDone: ([error]) => _onAudioDone(context, error),
+          );
+        }
+        _syncMediaDimensions(entry, mediaFileInfo);
+        _updateBiliDownloadEntryJson(entry);
+        break;
+      default:
+        break;
+    }
+  }
+
+  Future<Directory> _ensureVideoDir(BiliDownloadEntryInfo entry) async {
+    final videoDir = Directory(path.join(entry.entryDirPath, entry.typeTag));
+    if (!videoDir.existsSync()) {
+      await videoDir.create(recursive: true);
+    }
+    return videoDir;
+  }
+
+  void _syncMediaDimensions(BiliDownloadEntryInfo entry, Type2 mediaFileInfo) {
+    late final first = mediaFileInfo.video.first;
+    entry.pageData
+      ?..width = first.width
+      ..height = first.height;
+    entry.ep
+      ?..width = first.width
+      ..height = first.height;
+  }
+
+  DownloadStatus _resolveActiveTransferStatus(_ActiveDownloadContext context) {
+    final status = switch (context.audioDownloadManager?.status) {
+      DownloadStatus.downloading => DownloadStatus.audioDownloading,
+      DownloadStatus.failDownload => DownloadStatus.failDownloadAudio,
+      _ => context.downloadManager?.status ?? DownloadStatus.pause,
+    };
+    switch (status) {
+      case DownloadStatus.audioDownloading:
+        context.phase = _ActiveDownloadPhase.downloadingAudio;
+        break;
+      case DownloadStatus.failDownloadAudio:
+        context.failureReason = _ActiveDownloadFailureReason.audioDownload;
+        break;
+      default:
+        break;
+    }
+    _updateCurStatus(status);
+    return status;
   }
 
   Future<void> _updateBiliDownloadEntryJson(BiliDownloadEntryInfo entry) {
@@ -445,78 +605,77 @@ class DownloadService extends GetxService {
     return entryJsonFile.writeAsString(jsonEncode(entry.toJson()));
   }
 
-  void _onReceive(int progress, int total) {
-    if (curDownload.value case final entry?) {
-      if (progress == 0 && total != 0) {
-        _updateBiliDownloadEntryJson(entry..totalBytes = total);
-      }
-      entry
-        ..downloadedBytes = progress
-        ..status = DownloadStatus.downloading;
-      curDownload.refresh();
+  void _onReceive(_ActiveDownloadContext context, int progress, int total) {
+    final entry = curDownload.value;
+    if (entry == null || !_isActiveContext(context)) return;
+    if (progress == 0 && total != 0) {
+      _updateBiliDownloadEntryJson(entry..totalBytes = total);
     }
+    _setActivePhase(context, _ActiveDownloadPhase.downloadingMedia);
+    entry
+      ..downloadedBytes = progress
+      ..status = context.phase.status;
+    curDownload.refresh();
+    _syncForegroundProgress(entry);
   }
 
-  void _onDone([Object? error]) {
+  void _onDone(_ActiveDownloadContext context, [Object? error]) {
+    final entry = curDownload.value;
+    if (entry == null || !_isActiveContext(context)) return;
     if (error != null) {
-      _updateCurStatus(_downloadManager?.status ?? DownloadStatus.pause);
+      _setActiveFailure(context, _ActiveDownloadFailureReason.mediaDownload);
+      final audioManager = context.audioDownloadManager;
+      _applyActiveTransition(_ActiveDownloadTransition.failed(entry));
+      unawaited(audioManager?.cancel(isDelete: false));
       return;
     }
 
-    final status = switch (_audioDownloadManager?.status) {
-      DownloadStatus.downloading => DownloadStatus.audioDownloading,
-      DownloadStatus.failDownload => DownloadStatus.failDownloadAudio,
-      _ => _downloadManager?.status ?? DownloadStatus.pause,
-    };
-    _updateCurStatus(status);
+    final status = _resolveActiveTransferStatus(context);
 
-    if (curDownload.value case final curEntryInfo?) {
-      curEntryInfo.downloadedBytes = curEntryInfo.totalBytes;
-      if (status == DownloadStatus.completed) {
-        _completeDownload();
-      } else {
-        _updateBiliDownloadEntryJson(curEntryInfo);
+    entry.downloadedBytes = entry.totalBytes;
+    if (status == DownloadStatus.completed) {
+      _completeDownload(context);
+    } else {
+      _updateBiliDownloadEntryJson(entry);
+      if (status == DownloadStatus.failDownloadAudio) {
+        _applyActiveTransition(_ActiveDownloadTransition.failed(entry));
       }
     }
   }
 
-  void _onAudioDone([Object? error]) {
-    if (_downloadManager?.status == DownloadStatus.completed) {
-      if (error == null) {
-        _completeDownload();
-      } else {
-        final status = _audioDownloadManager?.status ?? DownloadStatus.pause;
-        _updateCurStatus(
-          status == DownloadStatus.failDownload
-              ? DownloadStatus.failDownloadAudio
-              : status,
-        );
-      }
-    }
-  }
-
-  Future<void> _completeDownload() async {
+  void _onAudioDone(_ActiveDownloadContext context, [Object? error]) {
     final entry = curDownload.value;
-    if (entry == null) {
+    if (entry == null || !_isActiveContext(context)) return;
+    if (context.downloadManager?.status != DownloadStatus.completed) return;
+    if (error == null) {
+      _updateCurStatus(DownloadStatus.completed);
+      _completeDownload(context);
+      return;
+    }
+    _setActiveFailure(context, _ActiveDownloadFailureReason.audioDownload);
+    _applyActiveTransition(_ActiveDownloadTransition.failed(entry));
+  }
+
+  Future<void> _completeDownload(_ActiveDownloadContext context) async {
+    final entry = curDownload.value;
+    if (entry == null || !_isActiveContext(context)) {
       return;
     }
     entry
       ..downloadedBytes = entry.totalBytes
+      ..status = DownloadStatus.completed
       ..isCompleted = true;
     await _updateBiliDownloadEntryJson(entry);
     waitDownloadQueue.remove(entry);
     downloadList.insert(0, entry);
     flagNotifier.refresh();
-    _curCid = null;
-    curDownload.value = null;
-    _downloadManager = null;
-    _audioDownloadManager = null;
-    nextDownload();
+    _applyActiveTransition(_ActiveDownloadTransition.completed(entry));
   }
 
-  void nextDownload() {
-    if (waitDownloadQueue.isNotEmpty) {
-      startDownload(waitDownloadQueue.first);
+  void nextDownload({int? excludingCid}) {
+    final nextEntry = _nextQueuedEntry(excludingCid: excludingCid);
+    if (nextEntry != null) {
+      startDownload(nextEntry);
     }
   }
 
@@ -527,13 +686,14 @@ class DownloadService extends GetxService {
     bool refresh = true,
     bool downloadNext = true,
   }) async {
+    final isCurrentEntry = curDownload.value?.cid == entry.cid;
     if (removeList) {
       downloadList.remove(entry);
     }
-    if (removeQueue) {
+    if (removeQueue || isCurrentEntry) {
       waitDownloadQueue.remove(entry);
     }
-    if (curDownload.value?.cid == entry.cid) {
+    if (isCurrentEntry) {
       await cancelDownload(
         isDelete: true,
         downloadNext: downloadNext,
@@ -570,26 +730,179 @@ class DownloadService extends GetxService {
     required bool isDelete,
     bool downloadNext = true,
   }) async {
-    await _downloadManager?.cancel(isDelete: isDelete);
-    await _audioDownloadManager?.cancel(isDelete: isDelete);
-    _downloadManager = null;
-    _audioDownloadManager = null;
+    final entry = curDownload.value;
+    await _cancelActiveManagers(isDelete: isDelete);
     if (!isDelete) {
-      final entry = curDownload.value;
       if (entry != null) {
         await _updateBiliDownloadEntryJson(entry);
+        entry.status = DownloadStatus.pause;
       }
     }
-    if (isDelete) {
-      _curCid = null;
-      curDownload.value = null;
-    } else {
-      _updateCurStatus(DownloadStatus.pause);
-    }
-    if (downloadNext) {
-      nextDownload();
+    if (entry != null) {
+      _applyActiveTransition(
+        _ActiveDownloadTransition.cancelled(
+          entry,
+          downloadNext: downloadNext,
+          isDelete: isDelete,
+        ),
+      );
+    } else if (waitDownloadQueue.isEmpty || !downloadNext) {
+      _stopForegroundService();
     }
   }
+}
+
+final class _ActiveDownloadContext {
+  _ActiveDownloadContext({
+    required this.sessionId,
+    required this.entry,
+  }) : phase = _ActiveDownloadPhase.fetchingDanmaku;
+
+  final int sessionId;
+  final BiliDownloadEntryInfo entry;
+  _ActiveDownloadPhase phase;
+  _ActiveDownloadFailureReason? failureReason;
+  DownloadManager? downloadManager;
+  DownloadManager? audioDownloadManager;
+}
+
+final class _PreparedDownloadStage {
+  const _PreparedDownloadStage({
+    required this.entry,
+    required this.mediaFileInfo,
+    required this.videoDir,
+  });
+
+  final BiliDownloadEntryInfo entry;
+  final BiliDownloadMediaInfo mediaFileInfo;
+  final Directory videoDir;
+}
+
+final class _DownloadPreparationCoordinator {
+  const _DownloadPreparationCoordinator({
+    required this.service,
+    required this.context,
+  });
+
+  final DownloadService service;
+  final _ActiveDownloadContext context;
+
+  BiliDownloadEntryInfo get entry => context.entry;
+
+  Future<_PreparedDownloadStage?> run() async {
+    service._setActivePhase(context, _ActiveDownloadPhase.fetchingDanmaku);
+    if (!await service._downloadDanmaku(
+      entry: entry,
+      isUpdate: false,
+      context: context,
+    )) {
+      if (service._isActiveContext(context)) {
+        service._applyActiveTransition(_ActiveDownloadTransition.failed(entry));
+      }
+      return null;
+    }
+    if (!service._isActiveContext(context)) return null;
+
+    service._setActivePhase(context, _ActiveDownloadPhase.resolvingMedia);
+
+    final mediaFileInfo = await DownloadHttp.getVideoUrl(
+      entry: entry,
+      ep: entry.ep,
+      source: entry.source,
+      pageData: entry.pageData,
+    );
+    final videoDir = await service._ensureVideoDir(entry);
+    final mediaJsonFile = File(path.join(videoDir.path, DownloadService._indexFile));
+    await Future.wait([
+      mediaJsonFile.writeAsString(jsonEncode(mediaFileInfo.toJson())),
+      service._downloadCover(entry: entry),
+    ]);
+
+    return _PreparedDownloadStage(
+      entry: entry,
+      mediaFileInfo: mediaFileInfo,
+      videoDir: videoDir,
+    );
+  }
+}
+
+final class _ActiveDownloadTransition {
+  const _ActiveDownloadTransition._({
+    required this.entry,
+    required this.downloadNext,
+    required this.excludingCid,
+    required this.stopForeground,
+    required this.forceLastProgress,
+  });
+
+  const _ActiveDownloadTransition.completed(BiliDownloadEntryInfo entry)
+    : this._(
+        entry: entry,
+        downloadNext: true,
+        excludingCid: null,
+        stopForeground: true,
+        forceLastProgress: true,
+      );
+
+  const _ActiveDownloadTransition.failed(BiliDownloadEntryInfo entry)
+    : this._(
+        entry: entry,
+        downloadNext: false,
+        excludingCid: null,
+        stopForeground: true,
+        forceLastProgress: false,
+      );
+
+  _ActiveDownloadTransition.cancelled(
+    BiliDownloadEntryInfo entry, {
+    required bool downloadNext,
+    required bool isDelete,
+  }) : this._(
+         entry: entry,
+         downloadNext: downloadNext,
+         excludingCid: isDelete ? null : entry.cid,
+         stopForeground: true,
+         forceLastProgress: false,
+       );
+
+  final BiliDownloadEntryInfo entry;
+  final bool downloadNext;
+  final int? excludingCid;
+  final bool stopForeground;
+  final bool forceLastProgress;
+}
+
+enum _ActiveDownloadPhase {
+  fetchingDanmaku,
+  resolvingMedia,
+  downloadingMedia,
+  downloadingAudio,
+}
+
+extension on _ActiveDownloadPhase {
+  DownloadStatus get status => switch (this) {
+    _ActiveDownloadPhase.fetchingDanmaku => DownloadStatus.getDanmaku,
+    _ActiveDownloadPhase.resolvingMedia => DownloadStatus.getPlayUrl,
+    _ActiveDownloadPhase.downloadingMedia => DownloadStatus.downloading,
+    _ActiveDownloadPhase.downloadingAudio => DownloadStatus.audioDownloading,
+  };
+}
+
+enum _ActiveDownloadFailureReason {
+  danmaku,
+  playUrl,
+  mediaDownload,
+  audioDownload,
+}
+
+extension on _ActiveDownloadFailureReason {
+  DownloadStatus get status => switch (this) {
+    _ActiveDownloadFailureReason.danmaku => DownloadStatus.failDanmaku,
+    _ActiveDownloadFailureReason.playUrl => DownloadStatus.failPlayUrl,
+    _ActiveDownloadFailureReason.mediaDownload => DownloadStatus.failDownload,
+    _ActiveDownloadFailureReason.audioDownload =>
+      DownloadStatus.failDownloadAudio,
+  };
 }
 
 typedef SetNotifier = Set<VoidCallback>;
