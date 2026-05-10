@@ -2,10 +2,12 @@ import 'dart:convert' show JsonEncoder, base64;
 import 'dart:math' show Random;
 
 import 'package:catcher_2/catcher_2.dart';
-import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:flutter/services.dart' show Clipboard, ClipboardData, MethodChannel;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 
 abstract final class Utils {
+  static const channel = MethodChannel('PiliPlus');
+
   static final random = Random();
 
   static const jsonEncoder = JsonEncoder.withIndent('    ');
